@@ -1,6 +1,7 @@
 # 🎒 TasBalance
 
-**TasBalance** adalah sistem **IoT (Internet of Things)** yang dirancang untuk mendeteksi beban berlebihan pada tas berdasarkan **usia, berat badan, tinggi badan**, dan **kendala kesehatan** pengguna. Aplikasi ini membantu mencegah cedera tulang belakang dengan memberi **rekomendasi berat tas yang aman** dan memantau berat tas **secara real-time**.
+**TasBalance** adalah sistem **IoT (Internet of Things)** yang dirancang untuk mendeteksi beban berlebihan pada tas berdasarkan **usia, berat badan, tinggi badan**, dan **kendala kesehatan** pengguna. Aplikasi ini membantu mencegah cedera tulang belakang dengan memberi **rekomendasi berat tas yang aman** dan memantau berat tas **secara real-time**. TasBalance unik nya menggunakan Daur sampah plastik untuk membuat tasnya.
+
 
 ---
 
@@ -68,6 +69,4 @@
 - EEPROM / SPIFFS (untuk penyimpanan data)
 
 ---
-
-## 📂 Struktur Direktori
 
