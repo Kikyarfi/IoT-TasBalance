@@ -1,0 +1,9 @@
+Software used :
+Arduino Core for The ESP32 (V1.0.6).
+HX711 Arduino Library (V0.7.5).
+LiquidCrystal_I2C Arduino Library (V1.1.4).
+Arduino_JSON Arduino Library (V0.1.0).
+ESPAsyncWebServer Arduino Library (V1.2.2).
+AsyncTCP Arduino Library (V1.1.1).
+Visual Studio Code (1.99.3).
+Thonny (4.1.7).
