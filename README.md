@@ -48,6 +48,9 @@
 5. Data berat disimpan dan divisualisasikan dalam bentuk **grafik statistik**.
 6. Pengguna bisa melakukan **reset data** melalui dashboard.
 
+Hasil Contoh 
+![gambar](https://github.com/user-attachments/assets/2dc8ec16-394b-4997-b56c-628aee6c13b1)
+
 ---
 
 ## 🌟 Keunggulan TasBalance
