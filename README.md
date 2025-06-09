@@ -73,3 +73,5 @@
 
 ---
 
+## Diagram 
+![1 drawio](https://github.com/user-attachments/assets/d3f49ce5-eaf3-4f8e-bb7b-f4fa5842f9f6)
