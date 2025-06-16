@@ -1,0 +1,155 @@
+#include <WiFi.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include <HX711.h>
+#include <Preferences.h>
+#include <Arduino_JSON.h>
+#include "PageIndex.h"
+
+// Pin HX711
+#define LOADCELL_DOUT_PIN 5
+#define LOADCELL_SCK_PIN  18
+
+// WiFi config (Access Point, bisa diubah ke STA jika mau)
+const char* ssid = "TasBalance_ESP32";
+const char* password = "timbangtas123";
+
+// Data Profil & Log
+struct UserProfile {
+  String mode; // "Anak", "Mahasiswa", "Lansia"
+  int usia;
+  float berat_badan;
+  float tinggi_badan;
+  String riwayat;
+  float batas_aman;
+} profile;
+
+struct BeratLog {
+  unsigned long timestamp;
+  float berat;
+};
+#define LOG_MAX_ENTRIES 50
+BeratLog berat_log[LOG_MAX_ENTRIES];
+int log_index = 0;
+
+// Objek
+HX711 scale;
+Preferences preferences;
+AsyncWebServer server(80);
+AsyncEventSource events("/events");
+
+// Data runtime
+float current_weight = 0.0;
+bool overload_warning = false;
+
+#Fungsi_Kalkulasi
+float hitung_batas_aman(String mode, float berat_badan, int usia, String riwayat) {
+  float persentase = 0.1;
+  if (mode == "Anak") persentase = 0.15;
+  else if (mode == "Mahasiswa") persentase = 0.12;
+  else if (mode == "Lansia") persentase = 0.08;
+  // Jika ada masalah kesehatan, perketat batas
+  if (riwayat.indexOf("skoliosis") >= 0 || riwayat.indexOf("cedera") >= 0) persentase -= 0.03;
+  float batas = berat_badan * persentase * 1000; // ke gram
+  return batas;
+}
+
+#Setup Server & Endpoint Dashboard
+void setup_server() {
+  // Halaman utama (dashboard)
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send_P(200, "text/html", MAIN_page);
+  });
+
+  // Set profil user
+  server.on("/setProfile", HTTP_POST, [](AsyncWebServerRequest *request){
+    String body;
+    request->onBody([&](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+      body = String((char*)data);
+      JSONVar obj = JSON.parse(body);
+      profile.mode = (const char*)obj["mode"];
+      profile.usia = (int)obj["usia"];
+      profile.berat_badan = (float)obj["berat"];
+      profile.tinggi_badan = (float)obj["tinggi"];
+      profile.riwayat = (const char*)obj["riwayat"];
+      profile.batas_aman = hitung_batas_aman(profile.mode, profile.berat_badan, profile.usia, profile.riwayat);
+      // Simpan profil
+      preferences.putString("mode", profile.mode);
+      preferences.putInt("usia", profile.usia);
+      preferences.putFloat("berat_badan", profile.berat_badan);
+      preferences.putFloat("tinggi_badan", profile.tinggi_badan);
+      preferences.putString("riwayat", profile.riwayat);
+      preferences.putFloat("batas_aman", profile.batas_aman);
+      request->send(200, "application/json", "{\"status\":\"OK\"}");
+    });
+  });
+
+  // Reset log
+  server.on("/resetLog", HTTP_POST, [](AsyncWebServerRequest *request){
+    log_index = 0;
+    request->send(200, "application/json", "{\"reset\":\"OK\"}");
+  });
+
+  // Get log
+  server.on("/getLog", HTTP_GET, [](AsyncWebServerRequest *request){
+    JSONVar arr;
+    for (int i=0; i<log_index; i++) {
+      JSONVar entry;
+      entry["timestamp"] = berat_log[i].timestamp;
+      entry["berat"] = berat_log[i].berat;
+      arr[i] = entry;
+    }
+    request->send(200, "application/json", JSON.stringify(arr));
+  });
+
+  // EventSource (real-time update)
+  events.onConnect([](AsyncEventSourceClient *client){
+    client->send("hello!", NULL, millis(), 10000);
+  });
+  server.addHandler(&events);
+  server.begin();
+}
+
+#Setup & Loop
+void setup() {
+  Serial.begin(115200);
+  scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
+  preferences.begin("TasBalance", false);
+
+  // Load profil
+  profile.mode = preferences.getString("mode", "Anak");
+  profile.usia = preferences.getInt("usia", 12);
+  profile.berat_badan = preferences.getFloat("berat_badan", 40.0);
+  profile.tinggi_badan = preferences.getFloat("tinggi_badan", 140.0);
+  profile.riwayat = preferences.getString("riwayat", "");
+  profile.batas_aman = preferences.getFloat("batas_aman", hitung_batas_aman(profile.mode, profile.berat_badan, profile.usia, profile.riwayat));
+
+  // Setup WiFi Access Point
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(ssid, password);
+  delay(1000);
+  setup_server();
+}
+
+void loop() {
+  if (scale.is_ready()) {
+    current_weight = scale.get_units(5);
+    overload_warning = (current_weight > profile.batas_aman);
+
+    // Logging (setiap update, bisa diatur per sekian detik)
+    if (log_index < LOG_MAX_ENTRIES) {
+      berat_log[log_index].timestamp = millis();
+      berat_log[log_index].berat = current_weight;
+      log_index++;
+    }
+
+    // Kirim update ke dashboard
+    JSONVar data;
+    data["berat"] = current_weight;
+    data["batas_aman"] = profile.batas_aman;
+    data["status"] = overload_warning ? "BERLEBIH" : "AMAN";
+    data["timestamp"] = millis();
+    events.send(JSON.stringify(data).c_str(), "beratRealtime", millis());
+  }
+  delay(1500); // Sampling berat tiap 1,5 detik
+}
