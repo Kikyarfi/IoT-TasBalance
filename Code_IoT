@@ -1,155 +1,212 @@
+#include <SPIFFS.h>
 #include <WiFi.h>
-#include <AsyncTCP.h>
-#include <ESPAsyncWebServer.h>
-#include <HX711.h>
-#include <Preferences.h>
-#include <Arduino_JSON.h>
-#include "PageIndex.h"
+#include <WebServer.h>
+#include "HX711.h"
 
-// Pin HX711
-#define LOADCELL_DOUT_PIN 5
-#define LOADCELL_SCK_PIN  18
-
-// WiFi config (Access Point, bisa diubah ke STA jika mau)
-const char* ssid = "TasBalance_ESP32";
-const char* password = "timbangtas123";
-
-// Data Profil & Log
-struct UserProfile {
-  String mode; // "Anak", "Mahasiswa", "Lansia"
-  int usia;
-  float berat_badan;
-  float tinggi_badan;
-  String riwayat;
-  float batas_aman;
-} profile;
-
-struct BeratLog {
-  unsigned long timestamp;
-  float berat;
-};
-#define LOG_MAX_ENTRIES 50
-BeratLog berat_log[LOG_MAX_ENTRIES];
-int log_index = 0;
-
-// Objek
+// === Load Cell Configuration ===
+#define DT 16
+#define SCK 4
 HX711 scale;
-Preferences preferences;
-AsyncWebServer server(80);
-AsyncEventSource events("/events");
+float berat = 0.0;
+float scale_factor = 214.3917;  // Ganti sesuai hasil kalibrasi
+int Buzzer = 17;
+int Button = 14;
 
-// Data runtime
-float current_weight = 0.0;
-bool overload_warning = false;
+// === WiFi & Web Server ===
+const char* ssid = "Mikrotik";
+const char* password = "r4h4s1a4900**";
+WebServer server(80);
 
-#Fungsi_Kalkulasi
-float hitung_batas_aman(String mode, float berat_badan, int usia, String riwayat) {
-  float persentase = 0.1;
-  if (mode == "Anak") persentase = 0.15;
-  else if (mode == "Mahasiswa") persentase = 0.12;
-  else if (mode == "Lansia") persentase = 0.08;
-  // Jika ada masalah kesehatan, perketat batas
-  if (riwayat.indexOf("skoliosis") >= 0 || riwayat.indexOf("cedera") >= 0) persentase -= 0.03;
-  float batas = berat_badan * persentase * 1000; // ke gram
-  return batas;
+// === User Profile & Batas Berat ===
+String userData = "usia=0&berat=0&tinggi=0&mode=anak";
+float batas_berat = 5.0;
+
+// === Log Berat ===
+#define MAX_LOG 100
+float logBerat[MAX_LOG];
+int logIndex = 0;
+
+// === Penanda untuk Autosave Berat ===
+unsigned long lastStableTime = 0;
+float lastStableBerat = 0;
+bool beratTersimpan = false;
+
+void handleRoot();
+void handleSaveUser();
+void handleGetBatasBerat();
+void handleRealtimeWeight();
+void handleGetLog();
+void handleResetLog();
+
+float hitungBatasBerat(String mode, float beratBadan, String kondisi) {
+  if (mode == "anak") {
+    return beratBadan * 0.15;
+  } else if (mode == "dewasa") {
+    return beratBadan * 0.10;
+  } else if (mode == "lansia" || kondisi == "medis") {
+    return beratBadan * 0.08;
+  }
+  return 5.0;
 }
 
-#Setup Server & Endpoint Dashboard
-void setup_server() {
-  // Halaman utama (dashboard)
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send_P(200, "text/html", MAIN_page);
-  });
-
-  // Set profil user
-  server.on("/setProfile", HTTP_POST, [](AsyncWebServerRequest *request){
-    String body;
-    request->onBody([&](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
-      body = String((char*)data);
-      JSONVar obj = JSON.parse(body);
-      profile.mode = (const char*)obj["mode"];
-      profile.usia = (int)obj["usia"];
-      profile.berat_badan = (float)obj["berat"];
-      profile.tinggi_badan = (float)obj["tinggi"];
-      profile.riwayat = (const char*)obj["riwayat"];
-      profile.batas_aman = hitung_batas_aman(profile.mode, profile.berat_badan, profile.usia, profile.riwayat);
-      // Simpan profil
-      preferences.putString("mode", profile.mode);
-      preferences.putInt("usia", profile.usia);
-      preferences.putFloat("berat_badan", profile.berat_badan);
-      preferences.putFloat("tinggi_badan", profile.tinggi_badan);
-      preferences.putString("riwayat", profile.riwayat);
-      preferences.putFloat("batas_aman", profile.batas_aman);
-      request->send(200, "application/json", "{\"status\":\"OK\"}");
-    });
-  });
-
-  // Reset log
-  server.on("/resetLog", HTTP_POST, [](AsyncWebServerRequest *request){
-    log_index = 0;
-    request->send(200, "application/json", "{\"reset\":\"OK\"}");
-  });
-
-  // Get log
-  server.on("/getLog", HTTP_GET, [](AsyncWebServerRequest *request){
-    JSONVar arr;
-    for (int i=0; i<log_index; i++) {
-      JSONVar entry;
-      entry["timestamp"] = berat_log[i].timestamp;
-      entry["berat"] = berat_log[i].berat;
-      arr[i] = entry;
-    }
-    request->send(200, "application/json", JSON.stringify(arr));
-  });
-
-  // EventSource (real-time update)
-  events.onConnect([](AsyncEventSourceClient *client){
-    client->send("hello!", NULL, millis(), 10000);
-  });
-  server.addHandler(&events);
-  server.begin();
+void loadUserProfile() {
+  File f = SPIFFS.open("/user.txt", "r");
+  if (f) {
+    userData = f.readString();
+    f.close();
+  }
 }
 
-#Setup & Loop
+void saveUserProfile() {
+  File f = SPIFFS.open("/user.txt", "w");
+  if (f) {
+    f.print(userData);
+    f.close();
+  }
+}
+
+void simpanLog(float b) {
+  if (logIndex < MAX_LOG) {
+    logBerat[logIndex++] = b;
+  }
+}
+
+void resetLog() {
+  logIndex = 0;
+}
+
+void handleRoot() {
+  File f = SPIFFS.open("/index.html", "r");
+  if (f) {
+    String html = f.readString();
+    f.close();
+    server.send(200, "text/html", html);
+  } else {
+    server.send(200, "text/html", "<h2>ESP32 TasBalance</h2><p>Upload index.html ke SPIFFS</p>");
+  }
+}
+
+void handleSaveUser() {
+  if (server.hasArg("plain")) {
+    userData = server.arg("plain");
+    saveUserProfile();
+
+    // Parse ulang dan hitung batas berat baru
+    int usia = 0;
+    float beratBadan = 0, tinggi = 0;
+    char mode[20] = "anak";
+    char kondisi[20] = "";
+    sscanf(userData.c_str(), "usia=%d&berat=%f&tinggi=%f&mode=%s", &usia, &beratBadan, &tinggi, mode);
+    if (userData.indexOf("medis") > 0) strcpy(kondisi, "medis");
+    batas_berat = hitungBatasBerat(mode, beratBadan, kondisi);
+  }
+  server.send(200, "text/plain", "OK");
+}
+
+void handleGetBatasBerat() {
+  String msg = "Berat tas maksimum yang aman untuk Anda adalah " + String(batas_berat, 2) + " kg";
+  server.send(200, "text/plain", msg);
+}
+
+void handleRealtimeWeight() {
+  String json = "{\"berat\":" + String(berat,2) + ",\"batas_berat\":" + String(batas_berat,2) + "}";
+  server.send(200, "application/json", json);
+}
+
+void handleGetLog() {
+  String json = "[";
+  for (int i = 0; i < logIndex; i++) {
+    json += String(logBerat[i],2);
+    if (i < logIndex - 1) json += ",";
+  }
+  json += "]";
+  server.send(200, "application/json", json);
+}
+
+void handleResetLog() {
+  resetLog();
+  server.send(200, "text/plain", "Log direset");
+}
+
 void setup() {
   Serial.begin(115200);
-  scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
-  preferences.begin("TasBalance", false);
+  pinMode(Buzzer, OUTPUT);
+  pinMode(Button, INPUT_PULLUP);
 
-  // Load profil
-  profile.mode = preferences.getString("mode", "Anak");
-  profile.usia = preferences.getInt("usia", 12);
-  profile.berat_badan = preferences.getFloat("berat_badan", 40.0);
-  profile.tinggi_badan = preferences.getFloat("tinggi_badan", 140.0);
-  profile.riwayat = preferences.getString("riwayat", "");
-  profile.batas_aman = preferences.getFloat("batas_aman", hitung_batas_aman(profile.mode, profile.berat_badan, profile.usia, profile.riwayat));
+  scale.begin(DT, SCK);
+  scale.set_scale(scale_factor);
+  scale.tare();
 
-  // Setup WiFi Access Point
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(ssid, password);
-  delay(1000);
-  setup_server();
+  if (!SPIFFS.begin(true)) {
+    Serial.println("Gagal mount SPIFFS!");
+    return;
+  }
+
+  loadUserProfile();
+
+  // Parsing data user & hitung batas berat awal
+  int usia = 0;
+  float beratBadan = 0, tinggi = 0;
+  char mode[20] = "anak";
+  char kondisi[20] = "";
+  sscanf(userData.c_str(), "usia=%d&berat=%f&tinggi=%f&mode=%s", &usia, &beratBadan, &tinggi, mode);
+  if (userData.indexOf("medis") > 0) strcpy(kondisi, "medis");
+  batas_berat = hitungBatasBerat(mode, beratBadan, kondisi);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  Serial.print("Menghubungkan ke WiFi");
+  unsigned long startAttempt = millis();
+  const unsigned long timeout = 15000;
+  while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < timeout) {
+    Serial.print(".");
+    delay(500);
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\nGagal konek WiFi.");
+    return;
+  }
+  Serial.println("\nTerhubung!");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+
+  server.on("/", handleRoot);
+  server.on("/save-user", HTTP_POST, handleSaveUser);
+  server.on("/get-batas-berat", handleGetBatasBerat);
+  server.on("/realtime-weight", handleRealtimeWeight);
+  server.on("/get-log", handleGetLog);
+  server.on("/reset-log", handleResetLog);
+  server.begin();
+  Serial.println("Web server started");
 }
 
 void loop() {
-  if (scale.is_ready()) {
-    current_weight = scale.get_units(5);
-    overload_warning = (current_weight > profile.batas_aman);
+  server.handleClient();
 
-    // Logging (setiap update, bisa diatur per sekian detik)
-    if (log_index < LOG_MAX_ENTRIES) {
-      berat_log[log_index].timestamp = millis();
-      berat_log[log_index].berat = current_weight;
-      log_index++;
-    }
+  float newBerat = scale.get_units(5);
 
-    // Kirim update ke dashboard
-    JSONVar data;
-    data["berat"] = current_weight;
-    data["batas_aman"] = profile.batas_aman;
-    data["status"] = overload_warning ? "BERLEBIH" : "AMAN";
-    data["timestamp"] = millis();
-    events.send(JSON.stringify(data).c_str(), "beratRealtime", millis());
+  if (abs(newBerat - berat) > 0.05) {
+    berat = newBerat;
+    lastStableTime = millis(); // Reset timer saat berat berubah
+    beratTersimpan = false;
   }
-  delay(1500); // Sampling berat tiap 1,5 detik
+
+  // Simpan berat otomatis setelah 2 detik stabil
+  if (!beratTersimpan && (millis() - lastStableTime > 2000)) {
+    simpanLog(berat);
+    beratTersimpan = true;
+    lastStableBerat = berat;
+  }
+
+  // Buzzer & notifikasi
+  if (berat > batas_berat) {
+    digitalWrite(Buzzer, HIGH); // Aktifkan buzzer
+  } else {
+    digitalWrite(Buzzer, LOW);
+  }
+
+  if (digitalRead(Button) == LOW) {
+    resetLog();
+    delay(500); // debouncing
+  }
 }
