@@ -37,8 +37,10 @@
 ### ✅ Peringatan Beban Berlebih
 - Notifikasi di dashboard jika berat melebihi rekomendasi aman.
 
----
 
+---
+## ⚙️ Contoh Hasil Desain TasBalance yang diharapkan:
+![hifi](https://github.com/user-attachments/assets/7131eece-df6d-4223-9671-6c07d62e2694)
 ## ⚙️ Cara Kerja Sistem
 
 1. Pengguna meletakkan tas di atas **sensor Load Cell**.
@@ -48,8 +50,14 @@
 5. Data berat disimpan dan divisualisasikan dalam bentuk **grafik statistik**.
 6. Pengguna bisa melakukan **reset data** melalui dashboard.
 
-## ⚙️ Contoh Hasil 
-![gambar](https://github.com/user-attachments/assets/2dc8ec16-394b-4997-b56c-628aee6c13b1)
+## ⚙️ Contoh Hasil Input Pengguna
+![gambar](https://github.com/user-attachments/assets/2b632950-f622-4ddf-b832-7638b9ca3257)
+## ⚙️ Contoh Hasil Tampilan Dashboard
+![gambar](https://github.com/user-attachments/assets/248ac3a7-5aeb-4624-b65e-f79791cca9d3)
+## ⚙️ Contoh Hasil Tampilan Menu Riwayat
+![gambar](https://github.com/user-attachments/assets/8550a397-0ad4-4a8a-bf9b-b158bcf7f966)
+
+
 
 ---
 
